@@ -1,2 +1,8 @@
+pymupdf
+pandas
+python-docx
+python-pptx
+reportlab
+beautifulsoup4
+google-genai>=1.0.0
 streamlit
-openai
