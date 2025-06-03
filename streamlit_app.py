@@ -1,56 +1,197 @@
 import streamlit as st
-from openai import OpenAI
+import os
+import pandas as pd
+import fitz  # PyMuPDF
+from google import genai
+from google.genai import types
+from docx import Document
+from pptx import Presentation
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from bs4 import BeautifulSoup
+import re
+import base64
 
-# Show title and description.
-st.title("💬 Chatbot")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+# Set Gemini API Key
+client = genai.Client(api_key="AIzaSyC_sGvMgnZvJSEg9j1MS0vpBwsgCErLxr0")
+os.environ["XDG_CONFIG_HOME"] = "/tmp"
+# --------- File Extractors ---------
+def extract_text_from_docx(docx_file):
+    document = Document(docx_file)
+    return "\n".join([para.text for para in document.paragraphs])
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+def extract_text_from_csv(csv_file):
+    df = pd.read_csv(csv_file)
+    return df.to_string(index=False)
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+def extract_text_from_xlsx(xlsx_file):
+    df = pd.read_excel(xlsx_file)
+    return df.to_string(index=False)
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+def extract_text_from_pptx(pptx_file):
+    prs = Presentation(pptx_file)
+    text_runs = []
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if hasattr(shape, "text"):
+                text_runs.append(shape.text)
+    return "\n".join(text_runs)
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+def extract_text_from_pdf(pdf_file):
+    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+    text = ""
+    for page in doc:
+        text += page.get_text()
+    return text
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+def extract_text_from_html(html_file):
+    soup = BeautifulSoup(html_file.read(), "html.parser")
+    return soup.get_text()
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+def extract_text_from_tex(tex_file):
+    content = tex_file.read().decode("utf-8")
+    content = re.sub(r'\\[a-zA-Z]+\{[^}]*\}', '', content)
+    content = re.sub(r'\\[a-zA-Z]+', '', content)
+    return content
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
-        )
+def process_image(image_file):
+    image_bytes = image_file.read()
+    encoded_image = base64.b64encode(image_bytes).decode("utf-8")
+    return {
+        "inline_data": {
+            "mime_type": image_file.type,
+            "data": encoded_image
+        }
+    }
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+def export_conversation_to_pdf(conversation_history):
+    pdf_path = "Conversation.pdf"
+    doc = SimpleDocTemplate(pdf_path, pagesize=A4)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    for i, (user_q, gemini_a) in enumerate(conversation_history):
+        elements.append(Paragraph(f"<b>Q{i+1}:</b> {user_q}", styles["Normal"]))
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph(f"<b>A{i+1}:</b> {gemini_a.replace(chr(10), '<br/>')}", styles["Normal"]))
+        elements.append(Spacer(1, 16))
+
+    doc.build(elements)
+    return pdf_path
+
+# --------- Main App ---------
+def main():
+    st.set_page_config(page_title="Gemini 2.5 Pro Chat Q&A", layout="wide")
+    st.title("📄 Chat with Your Documents leveraging Internet Using Gemini 2.5 Pro (Team 18))")
+
+    if "conversation" not in st.session_state:
+        st.session_state.conversation = []
+    if "documents_text" not in st.session_state:
+        st.session_state.documents_text = []
+    if "chat_active" not in st.session_state:
+        st.session_state.chat_active = True
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    uploaded_files = st.file_uploader(
+        "Upload files (.txt, .docx, .csv, .xlsx, .pptx, .pdf, .html, .htm, .tex, .jpg, .jpeg, .png):",
+        type=["txt", "docx", "csv", "xlsx", "pptx", "pdf", "html", "htm", "tex", "jpg", "jpeg", "png"],
+        accept_multiple_files=True
+    )
+
+    if uploaded_files:
+        all_text_content = ""
+        for uploaded_file in uploaded_files:
+            filetype = uploaded_file.name.split(".")[-1].lower()
+            try:
+                if filetype == "txt":
+                    all_text_content += uploaded_file.read().decode("utf-8") + "\n"
+                elif filetype == "docx":
+                    all_text_content += extract_text_from_docx(uploaded_file) + "\n"
+                elif filetype == "csv":
+                    all_text_content += extract_text_from_csv(uploaded_file) + "\n"
+                elif filetype == "xlsx":
+                    all_text_content += extract_text_from_xlsx(uploaded_file) + "\n"
+                elif filetype == "pptx":
+                    all_text_content += extract_text_from_pptx(uploaded_file) + "\n"
+                elif filetype == "pdf":
+                    all_text_content += extract_text_from_pdf(uploaded_file) + "\n"
+                elif filetype in ["html", "htm"]:
+                    all_text_content += extract_text_from_html(uploaded_file) + "\n"
+                elif filetype == "tex":
+                    all_text_content += extract_text_from_tex(uploaded_file) + "\n"
+                elif filetype in ["jpg", "jpeg", "png"]:
+                    image_data = process_image(uploaded_file)
+                    st.session_state.image_data = image_data
+                    all_text_content += "Image uploaded and processed.\n"
+                    st.image(uploaded_file, caption=uploaded_file.name, use_container_width=True)
+                else:
+                    st.error(f"Unsupported file format: {uploaded_file.name}")
+            except Exception as e:
+                st.error(f"Failed to extract text from {uploaded_file.name}: {e}")
+
+        st.session_state.documents_text = all_text_content
+
+    if st.session_state.documents_text:
+        st.markdown("### 💬 Conversation")
+        for user_q, gemini_a in st.session_state.conversation:
+            st.markdown(f"**You:** {user_q}")
+            st.markdown(f"**Gemini:**\n\n{gemini_a}")
+
+        if st.session_state.chat_active:
+            with st.form(key="chat_form", clear_on_submit=True):
+                user_input = st.text_input("Ask a question about the documents (type 'exit' to stop):")
+                submit = st.form_submit_button("Send")
+
+                if submit and user_input:
+                    if user_input.strip().lower() == "exit":
+                        st.session_state.chat_active = False
+                        st.success("Chat ended. Reload to start again.")
+                    else:
+                        with st.spinner("Gemini is thinking..."):
+                            content_blocks = []
+
+                            if st.session_state.conversation:
+                                history_text = "\n\n".join(
+                                    f"Q: {entry[0]}\nA: {entry[1]}"
+                                    for entry in st.session_state.conversation
+                                )
+                                content_blocks.append({"text": f"Previous conversation:\n{history_text}"})
+
+                            if st.session_state.documents_text.strip():
+                                content_blocks.append({"text": f"Context:\n{st.session_state.documents_text}"})
+
+                            if "image_data" in st.session_state:
+                                content_blocks.append(st.session_state.image_data)
+
+                            content_blocks.append({"text": f"Question: {user_input}"})
+
+                            # ✅ Gemini with Internet Search
+                            response = client.models.generate_content(
+                                model="gemini-2.5-pro-preview-05-06",
+                                contents=content_blocks,
+                                config={"tools": [{"google_search": {}}]}
+                            )
+
+                            st.session_state.conversation.append((user_input, response.text))
+                            st.success("💡 Answer:")
+                            st.write(response.text)
+
+                            st.session_state.chat_history.append({
+                                "question": user_input,
+                                "answer": response.text
+                            })
+
+        if st.session_state.conversation:
+            pdf_path = export_conversation_to_pdf(st.session_state.conversation)
+            with open(pdf_path, "rb") as f:
+                st.download_button(
+                    label="📥 Export Conversation as PDF",
+                    data=f,
+                    file_name="Conversation.pdf",
+                    mime="application/pdf"
+                )
+
+if __name__ == "__main__":
+    main()
