@@ -14,9 +14,7 @@ import re
 import base64
 
 # Set Gemini API Key
-client = genai.Client(api_key="AIzaSyC_sGvMgnZvJSEg9j1MS0vpBwsgCErLxr0")
-os.environ["XDG_CONFIG_HOME"] = "/tmp"
-# --------- File Extractors ---------
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 def extract_text_from_docx(docx_file):
     document = Document(docx_file)
     return "\n".join([para.text for para in document.paragraphs])
