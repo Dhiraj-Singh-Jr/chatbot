@@ -80,8 +80,8 @@ def export_conversation_to_pdf(conversation_history):
 
 # --------- Main App ---------
 def main():
-    st.set_page_config(page_title="Gemini 2.5 Pro Chat Q&A", layout="wide")
-    st.title("📄 Chat with Your Documents leveraging Internet Using Gemini 2.5 Pro (Team 18))")
+    st.set_page_config(page_title="DocuMind", layout="wide")
+    st.title("📄 DocuMind")
 
     if "conversation" not in st.session_state:
         st.session_state.conversation = []
